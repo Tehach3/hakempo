@@ -1,6 +1,6 @@
-// Assets/_Game/Runtime/Events/GameUnityEvents.cs
+
 using UnityEngine.Events;
-using Game.Core;           // Para usar CardType y BattleResult
+using Game.Core;          
 
 namespace Game.Runtime.Events
 {

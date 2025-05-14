@@ -59,7 +59,7 @@ namespace Game.Core
         public static void FillRandom(List<CardType> deck, int size)
         {
             deck.Clear();
-            // 3️⃣  Versión compatible con .NET Standard 2.1
+          
             var values = (CardType[])Enum.GetValues(typeof(CardType));
 
             for (int i = 0; i < size; i++)

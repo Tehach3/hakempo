@@ -3,6 +3,7 @@ using System.Collections;
 using Game.Core;
 using UnityEngine;
 using Game.Runtime.Events;
+using Game.UI;
 using Random = UnityEngine.Random;
 
 namespace Game.Runtime
@@ -15,13 +16,20 @@ namespace Game.Runtime
         [Header("UI Roots")]
         [SerializeField] Transform handP1Root;
         [SerializeField] Transform handP2Root;
-        [SerializeField] Transform tableRoot; 
+        [SerializeField] Transform tableRoot;
+        [SerializeField] private UILife lifeUI;
         
-        [SerializeField] CardView  cardPrefab;   
+        [SerializeField] CardView  cardPrefab; 
+        
+        [SerializeField] private UIRoundResult roundResultUI;
+        
+        [SerializeField] private UIGameOver gameOverUI;
+
+
 
 
         public CardPlayedEvent onCardPlayed;   
-        public HpChangedEvent  onHpChanged; 
+        public Action<int, int> onHpChanged; 
         private bool playerHasPlayed;      
         private CardView pendingPlayerCard;
         private CardView pendingAICard;
@@ -39,18 +47,35 @@ namespace Game.Runtime
 
             if (handP1Root == null)
                 Debug.LogError("HandP1Root is not assigned!");
-            // 1) Crear jugadores
             p1 = new Player("Player");
             p2 = new Player("AI");
-
-            // 2) Generar y barajar mazos
+            
+            
             DeckUtils.FillRandom(p1.Deck, deckSize);
             DeckUtils.FillRandom(p2.Deck, deckSize);
-
-            // 3) Dibujar manos
+            
             DrawInitialHand(p1, handP1Root, true);
             DrawInitialHand(p2, handP2Root, false);
         }
+        
+       
+        
+        void Start()
+        {
+            
+            rounds = new RoundService(p1, p2);
+            rounds.OnRoundResolved += HandleRoundResolved;
+           
+            if (lifeUI == null)
+                lifeUI = FindObjectOfType<UILife>();
+
+            
+            onHpChanged += lifeUI.UpdateHp;
+
+          
+            onHpChanged?.Invoke(p1.Hp, p2.Hp);
+        }
+
         
         
 
@@ -58,14 +83,6 @@ namespace Game.Runtime
         {
             if (rounds == null) return;
             timer -= Time.deltaTime;
-
-           /** if (timer <= 0f)
-            {
-                AutoPlayIfNeeded(p1);
-                AutoPlayIfNeeded(p2);
-                rounds.Resolve();         
-                timer = turnTimeout;
-            }**/
         }
 
 
@@ -96,9 +113,22 @@ namespace Game.Runtime
             onCardPlayed?.Invoke(c1, c2, res);
             onHpChanged?.Invoke(p1.Hp, p2.Hp);
 
-            if (!rounds.CanStartNextRound(deckSize))
-                Debug.Log("Game Over");
+            roundResultUI.Show(c1, c2, res);
+            
+            bool p1SinCartas = p1.Deck.Count == 0 && p1.Hand.Count == 0;
+            bool p2SinCartas = p2.Deck.Count == 0 && p2.Hand.Count == 0;
+            bool sinCartasAmbos = p1SinCartas && p2SinCartas;
+            bool alguienMurio = p1.Hp <= 0 || p2.Hp <= 0;
+
+            if (sinCartasAmbos || alguienMurio)
+            {
+                roundResultUI.Hide();
+                gameOverUI.Show(p1.Hp, p2.Hp);
+                return;
+            }
         }
+
+
         private void DrawInitialHand(Player pl, Transform uiRoot, bool faceUp = true)
         {
             foreach (Transform c in uiRoot) Destroy(c.gameObject);
@@ -110,7 +140,7 @@ namespace Game.Runtime
                 pl.Deck.RemoveAt(0);
                 pl.Hand.Add(type);
 
-                //  Instantiate(cardPrefab, uiRoot).Init(type, faceUp);
+               
                 var view = Instantiate(cardPrefab, uiRoot);
                 view.Init(type, faceUp, OnCardClicked);
             }
@@ -118,18 +148,18 @@ namespace Game.Runtime
         
         private void OnCardClicked(CardView view)
         {
-            // ignora clics si ya jugó o si la carta es del rival
+            
             if (playerHasPlayed || view.transform.parent != handP1Root) return;
 
             playerHasPlayed = true;
             pendingPlayerCard = view;
 
-            PlayCardFromHand(p1, view.Type);   // lógica core
+            PlayCardFromHand(p1, view.Type);  
             MoveCardToTable(view, faceUp:true);
 
             DrawOneAndRefresh(p1, handP1Root, faceUp:true);
 
-            // Turno IA
+            
             PlayAITurn();
         }
         
@@ -143,7 +173,8 @@ namespace Game.Runtime
 
             DrawOneAndRefresh(p2, handP2Root, faceUp:false);
 
-            ResolveRound();   // ambas cartas ya en la mesa
+            ResolveRound();  
+            DrawOneAndRefresh(p1, handP1Root, faceUp: true);
         }
         
         private void MoveCardToTable(CardView view, bool faceUp)
@@ -154,6 +185,7 @@ namespace Game.Runtime
 
         private void DrawOneAndRefresh(Player pl, Transform uiRoot, bool faceUp)
         {
+            if (pl.Hand.Count >= handSize) return;
             if (pl.Deck.Count == 0) return;
 
             var type = pl.Deck[0];
@@ -162,53 +194,54 @@ namespace Game.Runtime
 
             Instantiate(cardPrefab, uiRoot)
                 .Init(type, faceUp, OnCardClicked);
-
-            // Re-posiciona si quieres: layout.RefreshLayout();
         }
         
         private void ResolveRound()
         {
-            var result = BattleRules.Compare(pendingPlayerCard.Type,
-                pendingAICard.Type);
-
-            // Muestra la carta de IA
-            pendingAICard.ShowFace(true);
-
-            // Log, HP, eventos…
-            Debug.Log($"Result: {result}");
-
-            // Limpia mesa y prepara siguiente turno
+            pendingAICard.ShowFace(true); 
+            rounds.Resolve();           
             StartCoroutine(ClearTableAndNextTurn());
+            Debug.Log($"Jugador seleccionó: {p1.SelectedCard}, IA seleccionó: {p2.SelectedCard}");
+
         }
         
         private void PlayCardFromHand(Player player, CardType type)
         {
-            // 1. quita la carta de la mano
             if (!player.Hand.Remove(type))
             {
                 Debug.LogError($"Card {type} not found in hand!");
                 return;
             }
 
-            // 2. marca como seleccionada (para RoundService)
-            player.Select(type);   // o: player.SelectedCard = type;
-
-            // 3. roba otra si queda mazo
-            if (player.Deck.Count > 0)
-            {
-                var newCard = player.Deck[0];
-                player.Deck.RemoveAt(0);
-                player.Hand.Add(newCard);
-            }
+            player.Select(type);
         }
-
+        
         IEnumerator ClearTableAndNextTurn()
         {
-            yield return new WaitForSeconds(1.5f);  // deja ver las cartas
+            Debug.Log("🟡 Entró en ClearTableAndNextTurn");
+            yield return new WaitForSeconds(0.1f);
+            
+            Debug.Log($"P1 - Deck: {p1.Deck.Count}, Hand: {p1.Hand.Count}");
+            Debug.Log($"P2 - Deck: {p2.Deck.Count}, Hand: {p2.Hand.Count}");
+
             Destroy(pendingPlayerCard.gameObject);
             Destroy(pendingAICard.gameObject);
 
+            pendingPlayerCard = null;
+            pendingAICard = null;
             playerHasPlayed = false;
+            bool p1SinCartas = p1.Deck.Count == 0 && p1.Hand.Count == 0;
+            bool p2SinCartas = p2.Deck.Count == 0 && p2.Hand.Count == 0;
+            bool sinCartasAmbos = p1SinCartas && p2SinCartas;
+            bool alguienMurio = p1.Hp <= 0 || p2.Hp <= 0;
+
+            if (sinCartasAmbos || alguienMurio)
+            {
+                roundResultUI.Hide();
+                gameOverUI.Show(p1.Hp, p2.Hp);
+                yield break;
+            }
         }
+
     }
 }

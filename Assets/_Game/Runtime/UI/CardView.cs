@@ -1,6 +1,7 @@
+using System;
 using UnityEngine;
 using UnityEngine.UI;
-using Game.Core;        // <- contiene el enum CardType
+using Game.Core;       
 
 /// <summary>
 /// Representación visual de una carta: asigna el sprite correcto
@@ -10,10 +11,9 @@ public class CardView : MonoBehaviour
 {
     // ───────────────────────────────────────── UI refs
     [Header("UI")]
-    [SerializeField] private Image frontImage;   // La Image donde se pinta la carta
+    [SerializeField] private Image frontImage; 
 
-    // (opcional) Si planeas girar la carta y ocultarla,
-    // puedes exponer un sprite de reverso o una segunda Image.
+
     [SerializeField] private Sprite backSprite;
 
     // ───────────────────────────────────────── Sprites por tipo
@@ -33,15 +33,17 @@ public class CardView : MonoBehaviour
     /// Inicializa la carta con su tipo.  
     /// Llama a este método justo después de Instanciar el prefab.
     /// </summary>
-    public void Init(CardType t, bool faceUp = true,
-        System.Action<CardView> onSelect = null)
+    public void Init(CardType type, bool faceUp, Action<CardView> onClick)
     {
-        Type = t;
-        OnCardSelected = onSelect;
+        Type = type;
         ShowFace(faceUp);
+
+        var btn = GetComponent<Button>();
+        btn.onClick.RemoveAllListeners();
+        btn.onClick.AddListener(() => onClick?.Invoke(this));
     }
     
-    public void OnClick()   // asignado al Button
+    public void OnClick() 
     {
         OnCardSelected?.Invoke(this);
     }
@@ -59,9 +61,9 @@ public class CardView : MonoBehaviour
         CardType.Archer   => archerSprite,
         CardType.Knight   => knightSprite,
         CardType.Wizard   => wizardSprite,
-        CardType.Pikeman  => pikerSprite,      // “Pikeman” en tu enum
+        CardType.Pikeman  => pikerSprite,    
         CardType.Assassin => assassinSprite,
-        _                 => archerSprite      // Fallback
+        _                 => archerSprite  
     };
     
     
