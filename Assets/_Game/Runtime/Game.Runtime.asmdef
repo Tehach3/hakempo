@@ -3,7 +3,9 @@
     "rootNamespace": "",
     "references": [
         "Game.Core",
-        "Unity.TextMeshPro"
+        "Unity.TextMeshPro",
+        "PhotonUnityNetworking",
+        "PhotonRealtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

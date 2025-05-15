@@ -1,14 +1,16 @@
 using System;
 using System.Collections;
+using System.Linq;
 using Game.Core;
 using UnityEngine;
 using Game.Runtime.Events;
 using Game.UI;
+using Photon.Pun;
 using Random = UnityEngine.Random;
 
 namespace Game.Runtime
 {
-    public sealed class GameManager : MonoBehaviour
+    public sealed class GameManager : MonoBehaviourPunCallbacks
     {
         [SerializeField] float turnTimeout = 30f;
         [SerializeField] int   deckSize    = 12;
@@ -38,46 +40,32 @@ namespace Game.Runtime
         private RoundService rounds;
         private float        timer;
         public bool faceUp = false;
+        private bool isMyTurn;
+        private bool isOnline => PhotonNetwork.InRoom && !PhotonNetwork.OfflineMode;
+
 
         void Awake()
         {
-            
             if (handP1Root == null)
                 handP1Root = GameObject.Find("HandP1Root")?.transform;
 
             if (handP1Root == null)
                 Debug.LogError("HandP1Root is not assigned!");
-            p1 = new Player("Player");
-            p2 = new Player("AI");
-            
-            
-            DeckUtils.FillRandom(p1.Deck, deckSize);
-            DeckUtils.FillRandom(p2.Deck, deckSize);
-            
-            DrawInitialHand(p1, handP1Root, true);
-            DrawInitialHand(p2, handP2Root, false);
         }
+
         
        
         
         void Start()
         {
             
-            rounds = new RoundService(p1, p2);
-            rounds.OnRoundResolved += HandleRoundResolved;
-           
+            // Esto sí puede quedar
             if (lifeUI == null)
                 lifeUI = FindObjectOfType<UILife>();
 
-            
-            onHpChanged += lifeUI.UpdateHp;
-
-          
-            onHpChanged?.Invoke(p1.Hp, p2.Hp);
+            if (lifeUI != null)
+                onHpChanged += lifeUI.UpdateHp;
         }
-
-        
-        
 
         void Update()
         {
@@ -148,20 +136,26 @@ namespace Game.Runtime
         
         private void OnCardClicked(CardView view)
         {
-            
-            if (playerHasPlayed || view.transform.parent != handP1Root) return;
+            if (!isMyTurn || playerHasPlayed || view.transform.parent != handP1Root)
+                return;
 
             playerHasPlayed = true;
             pendingPlayerCard = view;
 
-            PlayCardFromHand(p1, view.Type);  
-            MoveCardToTable(view, faceUp:true);
+            PlayCardFromHand(p1, view.Type);
+            MoveCardToTable(view, faceUp: true);
 
-            DrawOneAndRefresh(p1, handP1Root, faceUp:true);
+            DrawOneAndRefresh(p1, handP1Root, faceUp: true);
 
-            
-            PlayAITurn();
+            if (isOnline)
+            {
+                // Enviar jugada al otro jugador
+                photonView.RPC("PlayCardRemotely", RpcTarget.Others, (int)view.Type);
+            }
+
+            // Esperar jugada del otro jugador (lógica multiplayer real más adelante)
         }
+
         
         private void PlayAITurn()
         {
@@ -201,9 +195,19 @@ namespace Game.Runtime
             pendingAICard.ShowFace(true); 
             rounds.Resolve();           
             StartCoroutine(ClearTableAndNextTurn());
+            // Al terminar una ronda, cambiar turno
+            isMyTurn = PhotonNetwork.IsMasterClient; // el host siempre inicia
+            photonView.RPC("SetTurn", RpcTarget.Others, !isMyTurn);
             Debug.Log($"Jugador seleccionó: {p1.SelectedCard}, IA seleccionó: {p2.SelectedCard}");
 
         }
+        
+        [PunRPC]
+        public void SetTurn(bool turn)
+        {
+            isMyTurn = turn;
+        }
+
         
         private void PlayCardFromHand(Player player, CardType type)
         {
@@ -215,6 +219,127 @@ namespace Game.Runtime
 
             player.Select(type);
         }
+        
+        public void StartGame()
+        {
+            Debug.Log("🔵 StartGame llamado");
+
+            // Crear jugadores
+            p1 = new Player("Player");
+            p2 = new Player("Enemy");
+
+            // Recuperar roots si no están asignados
+            if (handP1Root == null)
+                handP1Root = GameObject.Find("HandP1Root")?.transform;
+
+            if (handP2Root == null)
+                handP2Root = GameObject.Find("HandP2Root")?.transform;
+
+            if (tableRoot == null)
+                tableRoot = GameObject.Find("TableRoot")?.transform;
+
+            if (handP1Root == null || handP2Root == null || tableRoot == null)
+            {
+                Debug.LogError("❌ Faltan referencias a roots de UI (mano o mesa).");
+                return;
+            }
+
+            if (lifeUI == null)
+                lifeUI = FindObjectOfType<UILife>();
+
+            if (lifeUI == null)
+            {
+                Debug.LogError("❌ UILife no encontrado.");
+                return;
+            }
+
+            // Solo el host baraja y sincroniza
+            if (PhotonNetwork.IsMasterClient)
+            {
+                Debug.Log("🎲 Soy el host. Barajando mazos...");
+
+                DeckUtils.FillRandom(p1.Deck, deckSize);
+                DeckUtils.FillRandom(p2.Deck, deckSize);
+
+                var d1 = string.Join(",", p1.Deck.Select(c => (int)c));
+                var d2 = string.Join(",", p2.Deck.Select(c => (int)c));
+
+                photonView.RPC("ReceiveInitialGameData", RpcTarget.Others, d1, d2);
+
+                // Continuar localmente también
+                FinishSetup();
+            }
+        }
+
+
+        
+        [PunRPC]
+        public void ReceiveInitialGameData(string deck1Str, string deck2Str)
+        {
+            Debug.Log("🟢 Recibí los mazos del host");
+
+            var deck1 = deck1Str.Split(',').Select(int.Parse).Select(i => (CardType)i).ToList();
+            var deck2 = deck2Str.Split(',').Select(int.Parse).Select(i => (CardType)i).ToList();
+           
+            p1 = new Player("Host");
+            p2 = new Player("Guest");
+
+            p1.Deck.AddRange(deck1);
+            p2.Deck.AddRange(deck2);
+            
+            FinishSetup();
+        }
+        
+        private void FinishSetup()
+        {
+            if (handP1Root == null || handP2Root == null || tableRoot == null)
+            {
+                Debug.LogError("❌ No se puede continuar. Roots no asignadas.");
+                return;
+            }
+
+            DrawInitialHand(p1, handP1Root, true);
+            DrawInitialHand(p2, handP2Root, false);
+
+            rounds = new RoundService(p1, p2);
+            rounds.OnRoundResolved += HandleRoundResolved;
+
+            onHpChanged?.Invoke(p1.Hp, p2.Hp);
+
+            // Asignar turno inicial
+            isMyTurn = PhotonNetwork.IsMasterClient;
+        }
+
+        
+        [PunRPC]
+        public void PlayCardRemotely(int cardTypeValue)
+        {
+            var cardType = (CardType)cardTypeValue;
+
+            // Buscar carta en la mano del oponente
+            var uiRoot = handP2Root;
+            for (int i = 0; i < uiRoot.childCount; i++)
+            {
+                var view = uiRoot.GetChild(i).GetComponent<CardView>();
+                if (view.Type == cardType)
+                {
+                    pendingAICard = view;
+
+                    PlayCardFromHand(p2, cardType);
+                    MoveCardToTable(view, faceUp: false);
+                    DrawOneAndRefresh(p2, handP2Root, faceUp: false);
+                    break;
+                }
+            }
+
+            // Resolver ronda (solo si sos host)
+            if (PhotonNetwork.IsMasterClient)
+            {
+                ResolveRound();
+            }
+        }
+
+
         
         IEnumerator ClearTableAndNextTurn()
         {

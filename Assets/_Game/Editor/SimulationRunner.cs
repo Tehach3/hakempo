@@ -5,7 +5,9 @@ using Game.Core;
 
 namespace Game.EditorTools
 {
-    public static class SimulationRunner
+    
+#if UNITY_EDITOR
+     public static class SimulationRunner
     {
         private const int DeckSize = 12;
         private const int HandSize = 3;
@@ -83,4 +85,7 @@ namespace Game.EditorTools
             }
         }
     }
+
+#endif
+   
 }
